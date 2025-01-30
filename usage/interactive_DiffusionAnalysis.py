@@ -178,9 +178,8 @@ while wants_to_analyse:
             D_guess = float(D_guess)
     DA.calc_diffusion(selector, D_guess)
     print(f"\t{short}-Diffusioncoefficient: " + str(DA.D[selector]).replace(".", ","))
-    fig_CDF, fig_PDF = DA.plot_diffusion(selector)
+    fig_PDF = DA.plot_diffusion(selector)
     if want_to_save_results:
-        DA.save_fig_to_results(fig=fig_CDF, name="diffusion_CDF_" + short)
         DA.save_fig_to_results(fig=fig_PDF, name="diffusion_PDF_" + short)
 
     fig_sp = DA.plot_starting_points(selector)
