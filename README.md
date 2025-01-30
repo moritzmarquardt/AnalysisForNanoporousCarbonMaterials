@@ -1,6 +1,6 @@
-# Membrane Analysis Toolbox
+# Analysis for Carbon Materials
 With this toolbox you can analyse **molecular dynamics (MD)** simulation data to investigate properties of **nanoporous carbon materials (NCMs)**.  
-It has been developed in the group of Kristyna Pluhackova at the University of Stuttgart for analysing **NCM** and their properties such as diffusion. 
+It has been developed in the group of Kristyna Pluhackova at the University of Stuttgart for analysing **NCMs** and their properties such as diffusion. 
 
 ## Main Components:
 - TransitionPathAnalysis class with the following key features:
