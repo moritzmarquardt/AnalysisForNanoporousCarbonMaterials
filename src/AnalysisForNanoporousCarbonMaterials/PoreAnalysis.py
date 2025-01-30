@@ -1,0 +1,444 @@
+from typing import Tuple
+
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.optimize as optimize
+from scipy.stats import gaussian_kde
+
+from AnalysisForNanoporousCarbonMaterials.MembraneAnalysis import MembraneAnalysis
+from AnalysisForNanoporousCarbonMaterials.MembraneStructures import (
+    MembraneForPoreAnalysis,
+)
+
+
+class PoreAnalysis(MembraneAnalysis):
+    """
+    Class for analyzing Membrane pores.
+    This includes for example:
+    - The calculation of the effective pore size.
+    - The calculation of heat maps of the density of certain atoms in the membrane.
+    """
+
+    def __init__(
+        self,
+        topology_file: str,
+        trajectory_file: str,
+        membrane: MembraneForPoreAnalysis,
+        analysis_max_step_size_ps: int = None,
+        results_dir: str = None,
+        verbose=False,
+    ):
+        if not isinstance(membrane, MembraneForPoreAnalysis):
+            raise ValueError(
+                "The membrane object must be an instance of the abstract MembraneForPoreAnalysis."
+            )
+        super().__init__(
+            topology_file=topology_file,
+            trajectory_file=trajectory_file,
+            analysis_max_step_size_ps=analysis_max_step_size_ps,
+            results_dir=results_dir,
+            verbose=verbose,
+            membrane=membrane,
+        )
+
+    def analyseDensity(
+        self,
+        selectors,
+        z_range,
+        skip=50,
+        bw="scott",
+    ):
+        """
+        Analyze the density of the selected atoms in the membrane.
+
+        Parameters:
+            selectors (list): List of atom selectors.
+            z_range (Tuple): Tuple containing the z-axis constraints (z_min, z_max).
+            skip (int): Skip every n-th frame.
+            bw (str): Bandwidth method for the KDE.
+
+        Returns:
+            tuple: A tuple containing the density values and the figure object.
+        """
+        self._allocateTrajectories(selectors)
+
+        selectors_positions = []
+        for selector in selectors:
+            selectors_positions.append(self.trajectories[selector][:, ::skip, :])
+        selectors_positions = np.concatenate(selectors_positions, axis=0)
+
+        mask = (selectors_positions[:, :, 2] >= z_range[0]) & (
+            selectors_positions[:, :, 2] <= z_range[1]
+        )
+        filtered_positions = selectors_positions[mask][:, 0:2]
+
+        kde = gaussian_kde(filtered_positions.T, bw_method=bw)
+
+        # Evaluate the KDE on a grid and normalise it
+        xmin = min(filtered_positions[:, 0])
+        xmax = max(filtered_positions[:, 0])
+        xn = int((xmax - xmin))
+        ymin = min(filtered_positions[:, 1])
+        ymax = max(filtered_positions[:, 1])
+        yn = int((ymax - ymin))
+        x = np.linspace(xmin, xmax, xn)
+        y = np.linspace(ymin, ymax, yn)
+        X, Y = np.meshgrid(x, y)
+        Z = np.reshape(kde([X.ravel(), Y.ravel()]), X.shape)
+        fig = plt.figure()
+        plt.title(
+            f"Density of {selectors} in the Z-range {int(z_range[0])} to {int(z_range[1])}",
+            fontsize="x-large",
+        )
+        plt.xlabel("X-axis in Angstrom", fontsize="x-large")
+        plt.ylabel("Y-axis in Angstrom", fontsize="x-large")
+        plt.pcolormesh(X, Y, Z, shading="gouraud")
+        plt.colorbar()
+        plt.axis("equal")
+        return Z, fig
+
+    def analyseDensityNormed(
+        self,
+        selectors,
+        z_range,
+        skip=50,
+        bw="scott",
+    ):
+        """
+        same thing as analyseDensity but each selector is normalised on its own and added to the plot
+
+        Parameters:
+            selectors (list): List of atom selectors.
+            z_range (Tuple): Tuple containing the z-axis constraints (z_min, z_max).
+            skip (int): Skip every n-th frame.
+            bw (str): Bandwidth method for the KDE in Angstrom.
+
+        Returns:
+            tuple: A tuple containing the density values and the figure object.
+        """
+        self._allocateTrajectories(selectors)
+
+        selectors_positions = []
+        for selector in selectors:
+            selectors_positions.append(self.trajectories[selector][:, ::skip, :])
+
+        filtered_positions_list = []
+        for sp in selectors_positions:
+            mask = (sp[:, :, 2] >= z_range[0]) & (sp[:, :, 2] <= z_range[1])
+            filtered_positions = sp[mask][:, 0:2]
+            filtered_positions_list.append(filtered_positions)
+
+        xmin = min([min(fp[:, 0]) for fp in filtered_positions_list])
+        xmax = max([max(fp[:, 0]) for fp in filtered_positions_list])
+        xn = int((xmax - xmin))
+        ymin = min([min(fp[:, 1]) for fp in filtered_positions_list])
+        ymax = max([max(fp[:, 1]) for fp in filtered_positions_list])
+        yn = int((ymax - ymin))
+        x = np.linspace(xmin, xmax, xn)
+        y = np.linspace(ymin, ymax, yn)
+        X, Y = np.meshgrid(x, y)
+
+        Z_list = []
+        for filtered_positions in filtered_positions_list:
+            kde = gaussian_kde(filtered_positions.T, bw_method=bw)
+            Z = np.reshape(kde([X.ravel(), Y.ravel()]), X.shape)
+            Z_list.append(Z)
+
+        # norm all Z and add them and plot it
+        max_Z = [np.max(Z) for Z in Z_list]
+        Z_list = [Z / max_Z[i] for i, Z in enumerate(Z_list)]
+        Z = sum(Z_list)
+
+        fig = plt.figure()
+        plt.title(
+            f"Density of {selectors} in the Z-range {int(z_range[0])} to {int(z_range[1])}",
+            fontsize="x-large",
+        )
+        plt.xlabel("X-axis in Angstrom", fontsize="x-large")
+        plt.ylabel("Y-axis in Angstrom", fontsize="x-large")
+        plt.pcolormesh(X, Y, Z, shading="gouraud")
+        plt.colorbar()
+        plt.axis("equal")
+
+        return Z, fig
+
+    def calculateEffectivePoreSize(
+        self,
+        solvent_selectors: list[str],
+        z_constraints: Tuple[float, float],
+        y_constraints: Tuple[float, float],
+        strategy: str,
+        bins="auto",
+        skip: int = 50,
+    ):
+        """
+        Calculate the effective pore size of the membrane.
+
+        Parameters:
+            solvent_selectors (list): List of atom selectors for the solvent.
+            z_constraints (Tuple): Tuple containing the z-axis constraints (z_min, z_max) in Angstrom.
+            y_constraints (Tuple): Tuple containing the y-axis constraints (y_min, y_max) in Angstrom.
+            strategy (str): Strategy for calculating the pore size.
+            bins (int): Number of bins for the histogram.
+            skip (int): Skip every n-th frame.
+
+        Returns:
+            tuple: A tuple containing the lower and upper edges of the pore size distribution and the figure object in Angstrom.
+        """
+        self._allocateTrajectories(solvent_selectors)
+        self._allocateTrajectories(self.membrane.selectors)
+
+        combined_membrane_trajectories = []
+        for selector in self.membrane.selectors:
+            combined_membrane_trajectories.append(
+                self.trajectories[selector][:, ::skip, :]
+            )
+        combined_membrane_trajectories = np.concatenate(combined_membrane_trajectories)
+
+        combined_solvent_trajectories = []
+        for selector in solvent_selectors:
+            combined_solvent_trajectories.append(
+                self.trajectories[selector][:, ::skip, :]
+            )
+        combined_solvent_trajectories = np.concatenate(combined_solvent_trajectories)
+
+        membrane_atom_positions_filtered = self._filterPositions(
+            positions=combined_membrane_trajectories,
+            y_constraints=y_constraints,
+            z_constraints=z_constraints,
+        )
+        solvent_atom_positions_filtered = self._filterPositions(
+            positions=combined_solvent_trajectories,
+            y_constraints=y_constraints,
+            z_constraints=z_constraints,
+        )
+
+        bins = bins
+        membrane_hist, membrane_hist_edges = np.histogram(
+            membrane_atom_positions_filtered, density=1, bins=bins
+        )
+        solvent_hist, solvent_hist_edges = np.histogram(
+            solvent_atom_positions_filtered, density=1, bins=bins
+        )
+
+        pore_edges = self._calculate_pore_edges(
+            membrane_hist,
+            membrane_hist_edges,
+            solvent_hist,
+            solvent_hist_edges,
+            strategy=strategy,
+        )
+
+        fig = self.plotEffectivePoreSize(
+            membrane_hist,
+            membrane_hist_edges,
+            solvent_hist,
+            solvent_hist_edges,
+            pore_edges,
+        )
+
+        return (pore_edges[0], pore_edges[1]), fig
+
+    def analyseConstraints(self, membrane_selector, y_constraints, z_constraints):
+        """
+        Analyze the constraints on the atom positions.
+
+        Parameters:
+        - y_min (float): Minimum value for the y-axis constraint.
+        - y_max (float): Maximum value for the y-axis constraint.
+        - z_min (float): Minimum value for the z-axis constraint.
+        - z_max (float): Maximum value for the z-axis constraint.
+        """
+        y_min, y_max = y_constraints
+        z_min, z_max = z_constraints
+        membrane_atom_positions = self.trajectories[membrane_selector]
+
+        fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+
+        axs[0, 0].hist(membrane_atom_positions[:, :, 0].flatten())
+        axs[0, 0].set_title("Histogram for x-axis")
+        axs[0, 0].set_xlabel("X-axis in Angstroms")
+        axs[0, 0].set_ylabel("Frequency")
+
+        axs[0, 1].hist(membrane_atom_positions[:, :, 1].flatten(), bins=100)
+        axs[0, 1].axvline(x=y_min, color="r", linestyle="--")  # y_min line
+        axs[0, 1].axvline(x=y_max, color="r", linestyle="--")  # y_max line
+        axs[0, 1].set_title("Histogram for y-axis")
+        axs[0, 1].set_xlabel("Y-axis in Angstroms")
+        axs[0, 1].set_ylabel("Frequency")
+
+        axs[1, 0].hist(membrane_atom_positions[:, :, 2].flatten(), bins=100)
+        axs[1, 0].axvline(x=z_min, color="r", linestyle="--")  # z_min line
+        axs[1, 0].axvline(x=z_max, color="r", linestyle="--")  # z_max line
+        axs[1, 0].set_title("Histogram for z-axis")
+        axs[1, 0].set_xlabel("Z-axis in Angstroms")
+        axs[1, 0].set_ylabel("Frequency")
+
+        # Leave the last subplot empty
+        axs[1, 1].axis("off")
+
+        plt.tight_layout()
+        return fig
+
+    def _calculate_pore_edges(
+        self,
+        membrane_hist,
+        membrane_hist_edges,
+        solvent_hist,
+        solvent_hist_edges,
+        strategy="averaging",
+    ):
+        """
+        Calculate the lower and upper edges of the pore size distribution based on the averaging mathod.
+
+        Parameters:
+        c_hist (numpy.ndarray): Histogram of the concentration values.
+        c_bin_edges (numpy.ndarray): Bin edges of the concentration histogram.
+        dod_hex_hist (numpy.ndarray): Histogram of the DOD hex values.
+        dod_hex_bin_edges (numpy.ndarray): Bin edges of the DOD hex histogram.
+
+        Returns:
+        tuple: A tuple containing the average lower edge and average upper edge of the pore size distribution.
+        """
+        if strategy == "averaging":
+            first_zero_bin = np.where(membrane_hist == 0)[0][0]
+            first_zero_middle = (
+                membrane_hist_edges[first_zero_bin]
+                + membrane_hist_edges[first_zero_bin + 1]
+            ) / 2
+            first_non_zero_bin = np.where(solvent_hist > 0)[0][0]
+            first_non_zero_middle = (
+                solvent_hist_edges[first_non_zero_bin]
+                + solvent_hist_edges[first_non_zero_bin + 1]
+            ) / 2
+            avrg_lower_edge = np.abs(first_zero_middle + first_non_zero_middle) / 2
+
+            last_zero_bin = np.where(membrane_hist == 0)[0][-1]
+            last_zero_middle = (
+                membrane_hist_edges[last_zero_bin]
+                + membrane_hist_edges[last_zero_bin + 1]
+            ) / 2
+            last_non_zero_bin = np.where(solvent_hist > 0)[0][-1]
+            last_non_zero_middle = (
+                solvent_hist_edges[last_non_zero_bin]
+                + solvent_hist_edges[last_non_zero_bin + 1]
+            ) / 2
+            avrg_upper_edge = np.abs(last_zero_middle + last_non_zero_middle) / 2
+
+        elif strategy == "intersection":
+            """
+            calculate pore size boarders by calculating the intersection of the two histograms
+            """
+            # Find the last intersection point of the histograms
+
+            def intersection(x):
+                return self.hist_linear_interpol_eval(
+                    x, membrane_hist_edges, membrane_hist
+                ) - self.hist_linear_interpol_eval(x, solvent_hist_edges, solvent_hist)
+
+            min_x_membrane = membrane_hist_edges[0]
+            max_x_membrane = membrane_hist_edges[-1]
+            avrg_lower_edge = optimize.root_scalar(
+                intersection,
+                bracket=[min_x_membrane, (max_x_membrane + min_x_membrane) / 2],
+                method="brentq",
+            ).root
+            avrg_upper_edge = optimize.root_scalar(
+                intersection,
+                bracket=[(max_x_membrane + min_x_membrane) / 2, max_x_membrane],
+                method="brentq",
+            ).root
+
+        return avrg_lower_edge, avrg_upper_edge
+
+    def plotEffectivePoreSize(
+        self,
+        membrane_hist,
+        membrane_hist_edges,
+        solvent_hist,
+        solvent_hist_edges,
+        edges,
+    ):
+        """
+        Plot the data for the effective pore size calculation.
+        The x axis is in nm.
+
+        Returns:
+        - None
+        """
+        lower_edge, upper_edge = edges
+
+        fig = plt.figure(dpi=300)
+        x = np.linspace(membrane_hist_edges[0], membrane_hist_edges[-1], 1000)
+        plt.plot(
+            x / 10,
+            self.hist_linear_interpol_eval(x, membrane_hist_edges, membrane_hist),
+            label="Carbon\nmaterial",
+            color="gray",
+        )
+        plt.plot(
+            x / 10,
+            self.hist_linear_interpol_eval(x, solvent_hist_edges, solvent_hist),
+            label="Solvent",
+            color="blue",
+        )
+        plt.axvline(
+            x=lower_edge / 10,
+            color="r",
+            linestyle="--",
+            label="Effective\nboundaries",
+        )
+        plt.axvline(x=upper_edge / 10, color="r", linestyle="--")
+        plt.xlabel("X-axis / nm", fontsize="x-large")
+        plt.ylabel("Molecule frequency", fontsize="x-large")
+        # plt.title("Effective pore diameter", fontsize="x-large")
+        plt.grid(True)
+        # make grid lines less visible and more in the background
+        plt.gca().yaxis.grid(alpha=0.2)
+        plt.gca().xaxis.grid(alpha=0.2)
+        # add x ticks in red where the upper and lower edge are
+        plt.legend(fontsize="large")
+        # make y axis go to 25% higher than the highest value of the histograms
+        plt.ylim(0, 1.25 * max(max(membrane_hist), max(solvent_hist)))
+        plt.tight_layout()
+        # plt.show()
+        return fig
+
+    @staticmethod
+    def hist_linear_interpol_eval(x, hist_edges, hist):
+        """
+        Evaluate the histogram function at a given x value.
+        The histogram function is a piecewise linear interpolation of the histogram.
+        """
+        hist_edges_middle = hist_edges[0:-1] + np.diff(hist_edges) / 2
+        front_edge = hist_edges_middle[0] * 2 - hist_edges_middle[1]
+        back_edge = hist_edges_middle[-1] * 2 - hist_edges_middle[-2]
+        hist_edges_middle = np.append(
+            front_edge, np.append(hist_edges_middle, back_edge)
+        )
+        hist = np.append(0, np.append(hist, 0))
+        return np.interp(x, hist_edges_middle, hist)
+
+    @staticmethod
+    def _filterPositions(positions, y_constraints, z_constraints):
+        """
+        Filter positions based on y and z constraints.
+
+        Parameters:
+        positions (ndarray): Array of positions with shape (n_atoms, n_timesteps, 3).
+        y_constraints (Tuple): Tuple containing the y-axis constraints (y_min, y_max).
+        z_constraints (Tuple): Tuple containing the z-axis constraints (z_min, z_max).
+
+        Returns:
+        ndarray: Array of filtered x positions.
+        """
+        y_min, y_max = y_constraints
+        z_min, z_max = z_constraints
+        mask = (
+            (positions[:, :, 1] >= y_min)
+            & (positions[:, :, 1] <= y_max)
+            & (positions[:, :, 2] >= z_min)
+            & (positions[:, :, 2] <= z_max)
+        )
+        filtered_x_positions = positions[mask, 0].flatten()
+        return filtered_x_positions

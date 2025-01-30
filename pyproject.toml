@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "AnalysisForNanoporousCarbonMaterials"
+version = "2025.01.31"
+authors = [
+  { name="Moritz Marquardt", email="moritz.g.marquardt@gmail.com" },
+]
+description = "Toolbox for analysing simulation data Nanoporous Carbon Materials (NCMs)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENCE"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  "numpy",
+  "matplotlib",
+  "scipy",
+  "MDAnalysis",
+  "statsmodels"
+]
+
+[project.urls]
+Homepage = "https://github.com/moritzmarquardt/AnalysisForNanoporousCarbonMaterials"
+Issues = "https://github.com/moritzmarquardt/AnalysisForNanoporousCarbonMaterials/issues"
